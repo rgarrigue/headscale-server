@@ -1,0 +1,85 @@
+---
+services:
+  traefik:
+    image: traefik:v3
+    pull_policy: always
+    restart: unless-stopped
+    container_name: traefik
+    command:
+      - --log.level=INFO
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --global.sendAnonymousUsage=false
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+      - --certificatesresolvers.letsencrypt.acme.email=${EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./letsencrypt:/letsencrypt
+
+  headscale:
+    image: headscale/headscale:latest
+    pull_policy: always
+    container_name: headscale
+    restart: unless-stopped
+    command:
+      - serve
+    volumes:
+      - ./config:/etc/headscale
+      - ./data:/var/lib/headscale
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.headscale.rule=PathPrefix(`/`) && Host(`${DOMAIN}`)
+      - traefik.http.routers.headscale.tls.certresolver=letsencrypt
+      - traefik.http.services.headscale.loadbalancer.server.port=8080
+
+  headplane:
+    container_name: headplane
+    image: ghcr.io/tale/headplane:latest
+    restart: unless-stopped
+    volumes:
+      - ./config:/etc/headscale
+      - ./data:/var/lib/headscale
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      DEBUG: true
+      HEADSCALE_INTEGRATION: "docker"
+      HEADSCALE_CONTAINER: "headscale"
+      COOKIE_SECRET: "${COOKIE_SECRET}"
+      ROOT_API_KEY: "${ROOT_API_KEY}"
+      DISABLE_API_KEY_LOGIN: "true"
+      COOKIE_SECURE: "true"
+      HOST: "0.0.0.0"
+      PORT: "3000"
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.headplane.rule=PathPrefix(`/web`) && Host(`${DOMAIN}`)
+      - traefik.http.middlewares.stripweb.stripprefix.prefixes=/web
+      - traefik.http.routers.headplane.middlewares=stripweb@docker
+      - traefik.http.routers.headplane.tls.certresolver=letsencrypt
+      - traefik.http.services.headplane.loadbalancer.server.port=3000
+
+  # Alternative UI
+  # headscale-ui:
+  #   image: ghcr.io/gurucomputing/headscale-ui:latest
+  #   pull_policy: always
+  #   container_name: headscale-ui
+  #   restart: unless-stopped
+  #   labels:
+  #     - traefik.enable=true
+  #     - traefik.http.routers.headscale-ui.rule=PathPrefix(`/web`) && Host(`${DOMAIN}`)
+  #     - traefik.http.routers.headscale-ui.tls.certresolver=letsencrypt
+  #     - traefik.http.services.headscale-ui.loadbalancer.server.port=8080
+
+  # To nmap, curl and such for troubleshooting purpose
+  # debug:
+  #   image: alpine:latest
+  #   command:
+  #     - sleep
+  #     - infinity
